@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Wall Jump Rage</title>
+<style>
+    * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
+    }
+
+    html, body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        background: #101010;
+        font-family: Arial, sans-serif;
+        touch-action: none;
+    }
+
+    canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        background: linear-gradient(#151515, #222);
+    }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+
+let groundHeight = 80;
+
+// Calibration:
+// 1 game meter = 55 pixels.
+// The power bar meters and the wall meters now use the same scale.
+const METER_PIXELS = 38;
+const MAX_POWER_METERS = 12;
+const WALL_HEIGHT_METERS = 12;
+
+const player = {
+    x: 70,
+    y: 0,
+    w: 12,
+    h: 26,
+    vy: 0,
+    grounded: true,
+    dead: false,
+    rotation: 0
+};
+
+let gravity = 0.24;
+let charge = 0;
+let charging = false;
+let score = 0;
+let bestScore = Number(localStorage.getItem("wall_jump_best_score") || 0);
+let gameOver = false;
+let started = false;
+
+const WALL_WIDTH = 28; // πιο λεπτοί τοίχοι
+let wallSpeed = 4.2;
+let speedIncrease = 0.13;
+
+let wall = {
+    x: 0,
+    gapY: 0,
+    gapH: 170,
+    passed: false
+};
+
+function initPositions() {
+    player.y = canvas.height - groundHeight - player.h;
+    player.vy = 0;
+    player.grounded = true;
+    player.dead = false;
+    player.rotation = 0;
+
+    wall.x = canvas.width + 420;
+    wall.gapH = Math.max(130, Math.min(165, canvas.height * 0.22));
+    wall.gapY = randomGapY();
+    wall.passed = false;
+}
+
+function randomGapY() {
+    const minY = canvas.height - groundHeight - (WALL_HEIGHT_METERS * METER_PIXELS);
+    const maxY = canvas.height - groundHeight - wall.gapH - 40;
+    return minY + Math.random() * Math.max(80, maxY - minY);
+}
+
+function resetGame() {
+    score = 0;
+    wallSpeed = 4.2;
+    charge = 0;
+    charging = false;
+    gameOver = false;
+    started = true;
+    initPositions();
+}
+
+function nextWall() {
+    wall.x = canvas.width + 420 + Math.random() * 180;
+    wall.gapH = Math.max(125, Math.min(160, canvas.height * 0.21));
+    wall.gapY = randomGapY();
+    wall.passed = false;
+}
+
+function jumpByMeters(targetMeters) {
+    if (player.grounded && !gameOver) {
+        // Physics formula: jump height = velocity² / (2 * gravity)
+        // So velocity = sqrt(2 * gravity * height)
+        const targetPixels = targetMeters * METER_PIXELS;
+        const velocity = Math.sqrt(2.35 * gravity * targetPixels);
+
+        player.vy = -velocity;
+        player.grounded = false;
+    }
+}
+
+function update() {
+    if (!started || gameOver) {
+        if (gameOver && player.dead) {
+            player.vy += gravity;
+            player.y += player.vy;
+            player.rotation += 0.09;
+
+            if (player.y + player.h >= canvas.height - groundHeight) {
+                player.y = canvas.height - groundHeight - player.h;
+                player.vy = 0;
+            }
+        }
+        return;
+    }
+
+    if (charging) {
+        charge += 0.0105; // πιο αργά η μπάρα δύναμης
+        if (charge > 1) charge = 1;
+    }
+
+    player.vy += gravity;
+    player.y += player.vy;
+
+    if (player.y + player.h >= canvas.height - groundHeight) {
+        player.y = canvas.height - groundHeight - player.h;
+        player.vy = 0;
+        player.grounded = true;
+    }
+
+    if (player.y < 0) {
+        player.y = 0;
+        player.vy = 1;
+    }
+
+    wall.x -= wallSpeed;
+
+    if (!wall.passed && wall.x + WALL_WIDTH < player.x) {
+        wall.passed = true;
+        score += 500;
+        wallSpeed += speedIncrease;
+
+        if (score > bestScore) {
+            bestScore = score;
+            localStorage.setItem("wall_jump_best_score", String(bestScore));
+        }
+    }
+
+    if (wall.x + WALL_WIDTH < 0) {
+        nextWall();
+    }
+
+    const playerRight = player.x + player.w;
+    const playerBottom = player.y + player.h;
+    const wallRight = wall.x + WALL_WIDTH;
+
+    const overlapsX = playerRight > wall.x && player.x < wallRight;
+    const outsideGap = player.y < wall.gapY || playerBottom > wall.gapY + wall.gapH;
+
+    if (overlapsX && outsideGap) {
+        die();
+    }
+}
+
+function die() {
+    gameOver = true;
+    charging = false;
+    charge = 0;
+    wallSpeed = 0;
+    player.dead = true;
+    player.vy = 10;
+    if (navigator.vibrate) navigator.vibrate(160);
+}
+
+function drawPlayer() {
+    ctx.save();
+
+    ctx.translate(player.x + player.w / 2, player.y + player.h / 2);
+    ctx.rotate(player.rotation);
+
+    // σώμα
+    ctx.fillStyle = "#00ffd0";
+    ctx.fillRect(-player.w / 2, -player.h / 2 + 14, player.w, player.h - 14);
+
+    // κεφάλι
+    ctx.beginPath();
+    ctx.arc(0, -player.h / 2 + 5, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // πόδια
+    ctx.strokeStyle = "#00ffd0";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-8, player.h / 2 - 2);
+    ctx.lineTo(-15, player.h / 2 + 12);
+    ctx.moveTo(8, player.h / 2 - 2);
+    ctx.lineTo(15, player.h / 2 + 12);
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+function drawWall() {
+    ctx.fillStyle = "#ff4a4a";
+
+    // FULL 12m WALL SYSTEM
+    const fullWallHeight = WALL_HEIGHT_METERS * METER_PIXELS;
+    const wallTopY = canvas.height - groundHeight - fullWallHeight;
+
+    // top wall
+    ctx.fillRect(
+        wall.x,
+        wallTopY,
+        WALL_WIDTH,
+        wall.gapY - wallTopY
+    );
+
+    // bottom wall
+    ctx.fillRect(
+        wall.x,
+        wall.gapY + wall.gapH,
+        WALL_WIDTH,
+        (canvas.height - groundHeight) - (wall.gapY + wall.gapH)
+    );
+
+    // right side fixed meter scale
+    const meterX = canvas.width - 40;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.fillStyle = "white";
+    ctx.lineWidth = 2;
+    ctx.font = "16px Arial";
+
+    for(let i = 0; i <= WALL_HEIGHT_METERS; i++) {
+
+        const y = canvas.height - groundHeight - (i * METER_PIXELS);
+
+        // small line
+        ctx.beginPath();
+        ctx.moveTo(meterX, y);
+        ctx.lineTo(meterX + 18, y);
+        ctx.stroke();
+
+        // text
+        ctx.fillText(i + "m", meterX - 36, y + 5);
+    }
+}
+
+function drawUI() {
+    ctx.fillStyle = "white";
+    ctx.font = "bold 20px Arial";
+    ctx.fillText("Score: " + score, 24, 44);
+
+    ctx.font = "14px Arial";
+    ctx.fillText("Best: " + bestScore, 24, 72);
+
+    // power bar background
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(24, 95, 180, 18);
+
+    // power bar
+    ctx.fillStyle = charge < 0.65 ? "#00ff70" : "#ffcc00";
+    if (charge > 0.88) ctx.fillStyle = "#ff4949";
+    ctx.fillRect(24, 95, 180 * charge, 22);
+
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(24, 95, 180, 18);
+
+    // power meter lines
+    ctx.font = "11px Arial";
+    ctx.fillStyle = "rgba(255,255,255,0.8)";
+
+    for(let i=0;i<=MAX_POWER_METERS;i++){
+        const x = 24 + (180/MAX_POWER_METERS)*i;
+
+        ctx.beginPath();
+        ctx.moveTo(x, 95);
+        ctx.lineTo(x, i % 2 === 0 ? 117 : 109);
+        ctx.stroke();
+
+        if(i % 2 === 0){
+            ctx.fillText(i + "m", x - 8, 132);
+        }
+    }
+
+    // predicted jump height marker
+    const predictedMeters = charge * MAX_POWER_METERS;
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.font = "bold 14px Arial";
+    ctx.fillText(predictedMeters.toFixed(1) + "m", 215, 108);
+
+    ctx.font = "13px Arial";
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    
+    
+
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.font = "16px Arial";
+    
+}
+
+function drawStartScreen() {
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "white";
+    ctx.textAlign = "center";
+    ctx.font = "bold 44px Arial";
+    ctx.fillText("WALL JUMP RAGE", canvas.width / 2, canvas.height / 2 - 90);
+
+    ctx.font = "22px Arial";
+    ctx.fillText("Κράτα πατημένο για να γεμίσει η δύναμη", canvas.width / 2, canvas.height / 2 - 25);
+    ctx.fillText("Άφησε για να πηδήξει ο παίχτης", canvas.width / 2, canvas.height / 2 + 10);
+    ctx.fillText("+500 πόντοι για κάθε τοίχο", canvas.width / 2, canvas.height / 2 + 45);
+
+    ctx.font = "bold 26px Arial";
+    ctx.fillText("Πάτα για έναρξη", canvas.width / 2, canvas.height / 2 + 115);
+    ctx.textAlign = "left";
+}
+
+function drawGameOver() {
+    ctx.fillStyle = "rgba(0,0,0,0.58)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "white";
+    ctx.font = "bold 34px Arial";
+    ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 70);
+
+    ctx.font = "20px Arial";
+    ctx.fillText("Score: " + score, canvas.width / 2, canvas.height / 2 - 20);
+    ctx.fillText("Best: " + bestScore, canvas.width / 2, canvas.height / 2 + 20);
+
+    ctx.font = "bold 24px Arial";
+    ctx.fillText("Πάτα για ξανά", canvas.width / 2, canvas.height / 2 + 95);
+    ctx.textAlign = "left";
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // background stars/lines
+    ctx.fillStyle = "#171717";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#333";
+    ctx.fillRect(0, canvas.height - groundHeight, canvas.width, groundHeight);
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    for (let x = 0; x < canvas.width; x += 90) {
+        ctx.fillRect(x, canvas.height - groundHeight + 12, 45, 4);
+    }
+
+    drawWall();
+    drawPlayer();
+    drawUI();
+
+    if (!started) drawStartScreen();
+    if (gameOver) drawGameOver();
+
+    ctx.font = "bold 18px Arial";
+    ctx.fillStyle = "#00ff99";
+    ctx.textAlign = "center";
+    ctx.fillText(
+        "",
+        canvas.width / 2,
+        canvas.height - 25
+    );
+    ctx.textAlign = "left";
+
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+function pointerDown() {
+    if (!started || gameOver) {
+        resetGame();
+        return;
+    }
+
+    if (player.grounded) {
+        charging = true;
+    }
+}
+
+function pointerUp() {
+    if (!started || gameOver) return;
+
+    if (charging) {
+        charging = false;
+        const targetMeters = charge * MAX_POWER_METERS;
+        jumpByMeters(targetMeters);
+        charge = 0;
+    }
+}
+
+window.addEventListener("pointerdown", pointerDown);
+window.addEventListener("pointerup", pointerUp);
+window.addEventListener("pointercancel", pointerUp);
+
+initPositions();
+loop();
+</script>
+</body>
+</html>
